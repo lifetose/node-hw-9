@@ -10,6 +10,7 @@ import {
   IUser,
 } from "../interfaces/user.interface";
 import { actionTokenRepository } from "../repositories/action-token.repository";
+import { oldPasswordRepository } from "../repositories/old-password.repository";
 import { tokenRepository } from "../repositories/token.repository";
 import { userRepository } from "../repositories/user.repository";
 import { emailService } from "./email.service";
@@ -23,6 +24,7 @@ class AuthService {
     await this.isEmailExistOrThrow(dto.email);
     const password = await passwordService.hashPassword(dto.password);
     const user = await userRepository.create({ ...dto, password });
+    await oldPasswordRepository.create({ _userId: user._id, password });
 
     const tokens = tokenService.generateTokens({
       userId: user._id,
@@ -137,13 +139,39 @@ class AuthService {
     dto: IResetPasswordSet,
     jwtPayload: ITokenPayload,
   ): Promise<void> {
-    const password = await passwordService.hashPassword(dto.password);
-    await userRepository.updateById(jwtPayload.userId, { password });
+    const oldPasswords = await oldPasswordRepository.getByUserId(
+      jwtPayload.userId,
+    );
+
+    for (const oldPassword of oldPasswords) {
+      const isPasswordRepeated = await passwordService.comparePassword(
+        dto.password,
+        oldPassword.password,
+      );
+      if (isPasswordRepeated) {
+        throw new ApiError(
+          "New password must be different from previously used passwords",
+          400,
+        );
+      }
+    }
+
+    const hashedPassword = await passwordService.hashPassword(dto.password);
+
+    await userRepository.updateById(jwtPayload.userId, {
+      password: hashedPassword,
+    });
+
+    await oldPasswordRepository.create({
+      _userId: jwtPayload.userId,
+      password: hashedPassword,
+    });
 
     await actionTokenRepository.deleteManyByParams({
       _userId: jwtPayload.userId,
       type: ActionTokenTypeEnum.FORGOT_PASSWORD,
     });
+
     await tokenRepository.deleteManyByParams({ _userId: jwtPayload.userId });
   }
 
@@ -160,15 +188,44 @@ class AuthService {
     dto: IChangePassword,
   ): Promise<void> {
     const user = await userRepository.getById(jwtPayload.userId);
+
     const isPasswordCorrect = await passwordService.comparePassword(
       dto.oldPassword,
       user.password,
     );
+
     if (!isPasswordCorrect) {
       throw new ApiError("Invalid previous password", 401);
     }
-    const password = await passwordService.hashPassword(dto.password);
-    await userRepository.updateById(jwtPayload.userId, { password });
+
+    const oldPasswords = await oldPasswordRepository.getByUserId(
+      jwtPayload.userId,
+    );
+
+    for (const oldPassword of oldPasswords) {
+      const isPasswordRepeated = await passwordService.comparePassword(
+        dto.password,
+        oldPassword.password,
+      );
+      if (isPasswordRepeated) {
+        throw new ApiError(
+          "New password must be different from previously used passwords",
+          400,
+        );
+      }
+    }
+
+    const hashedPassword = await passwordService.hashPassword(dto.password);
+
+    await oldPasswordRepository.create({
+      _userId: jwtPayload.userId,
+      password: hashedPassword,
+    });
+
+    await userRepository.updateById(jwtPayload.userId, {
+      password: hashedPassword,
+    });
+
     await tokenRepository.deleteManyByParams({ _userId: jwtPayload.userId });
   }
 }

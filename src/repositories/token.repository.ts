@@ -24,6 +24,16 @@ class TokenRepository {
     });
     return deletedCount;
   }
+
+  public async findUsersWithOldTokens(date: Date): Promise<any[]> {
+    const usersWithOldTokens = await Token.find({ createdAt: { $lt: date } })
+      .populate("_userId", "name email")
+      .exec();
+
+    console.log(usersWithOldTokens);
+
+    return usersWithOldTokens;
+  }
 }
 
 export const tokenRepository = new TokenRepository();
